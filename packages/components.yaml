@@ -1,0 +1,10 @@
+# Where ESPHome fetches the spooky_show component from. (CI swaps this for
+# components-local.yaml to build the code under test.)
+external_components:
+  - source:
+      type: git
+      url: https://github.com/rightiswrong/esp32-overhead-spooky-lighting
+      ref: main
+      path: components
+    components: [spooky_show]
+    refresh: 1d

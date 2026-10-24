@@ -1,0 +1,98 @@
+name: Release
+
+# Publishes a GitHub release when main receives a commit whose
+# packages/base.yaml project version has no v<version> tag yet, or when a
+# v* tag is pushed. Each release carries, for each strip type (rgbcct, rgbw, rgb):
+#   spooky-overhead-<strip>-<tag>-ota.bin      upload from WLED or ESPHome OTA
+#   spooky-overhead-<strip>-<tag>-factory.bin  serial flash at 0x0
+# plus SHA256SUMS.txt. workflow_dispatch builds the same files as an artifact.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Decide tag and whether to publish
+        run: |
+          version=$(sed -n 's/^ *version: "\(.*\)"/\1/p' packages/base.yaml | head -n1)
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="$GITHUB_REF_NAME"; publish=true
+          else
+            tag="v$version"
+            if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+              publish=false
+            else
+              publish=$([[ "$GITHUB_REF" == refs/heads/main ]] && echo true || echo false)
+            fi
+          fi
+          echo "tag=$tag version=$version publish=$publish"
+          test "${tag#v}" = "$version" || { echo "::error::tag $tag != packages/base.yaml version $version"; exit 1; }
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "PUBLISH=$publish" >> "$GITHUB_ENV"
+
+      - run: python3 tools/check.py
+      - run: tools/hosttest/run.sh
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Compile
+        run: |
+          set -euo pipefail
+          pip install --quiet esphome==2026.10.0
+          mkdir -p dist
+          for strip in rgbcct rgbw rgb; do
+            cfg=spooky-overhead-$strip.yaml
+            sed -i 's#packages/components.yaml#packages/components-local.yaml#' "$cfg"
+            rm -rf .esphome/build
+            esphome compile "$cfg"
+            factory=$(find .esphome/build -name 'firmware.factory.bin' | head -n1)
+            ota=$(find .esphome/build -name 'firmware.ota.bin' | head -n1)
+            [ -n "$ota" ] || ota=$(find .esphome/build -name 'firmware.bin' | head -n1)
+            cp "$factory" "dist/spooky-overhead-$strip-$TAG-factory.bin"
+            cp "$ota"     "dist/spooky-overhead-$strip-$TAG-ota.bin"
+            git checkout -- "$cfg"
+          done
+          esphome version > esphome-version.txt
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+
+      - name: Release notes
+        run: |
+          v="$TAG"
+          {
+            echo "Pick the files for your strip: \`rgbcct\` (5 wires besides V+: R G B + warm + cold white),"
+            echo "\`rgbw\` (4) or \`rgb\` (3). **Read the README first**: check the pin mapping in WLED."
+            echo
+            echo "* From WLED (as shipped): Config → Security & Updates → Manual OTA update,"
+            echo "  upload \`spooky-overhead-<strip>-$v-ota.bin\`, then join the **Spooky Overhead setup** Wi-Fi."
+            echo "* Over serial: \`spooky-overhead-<strip>-$v-factory.bin\` at 0x0 (https://web.esphome.io)."
+            echo
+            echo "Built with ESPHome $(cat esphome-version.txt)."
+          } > release-notes.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spooky-overhead-${{ env.TAG }}
+          path: dist/
+
+      - name: Publish GitHub release
+        if: env.PUBLISH == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          target_commitish: ${{ github.sha }}
+          name: Spooky Overhead ${{ env.TAG }}
+          body_path: release-notes.md
+          files: dist/*

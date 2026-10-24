@@ -1,0 +1,58 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 4 * * 1" # weekly, catches ESPHome changes
+
+permissions:
+  contents: read
+
+jobs:
+  host-tests:
+    name: Effects + sound analyser (host simulation)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: python3 tools/check.py
+      - run: tools/hosttest/run.sh
+
+  shared-code:
+    name: Shared code matches Spooky Sound
+    runs-on: ubuntu-latest
+    # Informational: the upstream XIAO code may move ahead of this repo.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          repository: rightiswrong/esp32c6-spooky-sound
+          path: upstream
+      - run: python3 tools/sync_shared.py upstream/firmware/XIAO_SpookySound --check
+
+  esphome-build:
+    name: ESPHome build (${{ matrix.strip }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        strip: [rgbcct, rgbw, rgb]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: pip install esphome==2026.10.0
+      - name: Use this checkout's component, not main's
+        run: sed -i 's#packages/components.yaml#packages/components-local.yaml#' spooky-overhead-${{ matrix.strip }}.yaml
+      - run: esphome config spooky-overhead-${{ matrix.strip }}.yaml > /dev/null
+      - run: esphome compile spooky-overhead-${{ matrix.strip }}.yaml
+      - name: Fits WLED's app slot (for the OTA path from WLED)
+        run: |
+          ota=$(find .esphome/build -name 'firmware.ota.bin' | head -n1)
+          [ -n "$ota" ] || ota=$(find .esphome/build -name 'firmware.bin' | head -n1)
+          size=$(stat -c %s "$ota"); echo "$ota: $size bytes"
+          test "$size" -lt 1572864 || { echo "::error::image $size bytes won't fit a 1.5 MB WLED app slot"; exit 1; }
+          test "$size" -lt 1310720 || echo "::warning::image $size bytes is over 1.25 MB: OTA from WLED builds with the Arduino default partitions will fail"
