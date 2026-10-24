@@ -30,7 +30,10 @@ jobs:
         with:
           repository: rightiswrong/esp32c6-spooky-sound
           path: upstream
-      - run: python3 tools/sync_shared.py upstream/firmware/XIAO_SpookySound --check
+      - run: |
+          git -C upstream log -1 --format='upstream %h %s'
+          python3 tools/sync_shared.py upstream/firmware/XIAO_SpookySound --check \
+            || { echo "::warning::shared code differs from Spooky Sound main ($(git -C upstream rev-parse --short HEAD)): run tools/sync_shared.py"; exit 1; }
 
   esphome-build:
     name: ESPHome build (${{ matrix.strip }})
