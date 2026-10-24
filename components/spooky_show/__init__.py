@@ -16,6 +16,7 @@
 
 import esphome.codegen as cg
 from esphome.components import binary_sensor, event, sensor
+from esphome.components.esp32 import include_builtin_idf_component
 from esphome.components.light.effects import register_rgb_effect
 from esphome.components.light.types import LightEffect
 import esphome.config_validation as cv
@@ -92,6 +93,9 @@ CONFIG_SCHEMA = cv.Schema(
 async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
+    # ESPHome leaves the IDF ADC driver out unless a component asks for it;
+    # the microphone uses its continuous (DMA) mode.
+    include_builtin_idf_component("esp_adc")
     if CONF_MICROPHONE_PIN in config:
         cg.add(var.set_microphone_pin(config[CONF_MICROPHONE_PIN]))
     cg.add(var.set_sample_rate(config[CONF_SAMPLE_RATE]))
