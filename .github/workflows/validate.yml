@@ -47,8 +47,20 @@ jobs:
       - run: pip install esphome==2026.10.0
       - name: Use this checkout's component, not main's
         run: sed -i 's#packages/components.yaml#packages/components-local.yaml#' spooky-overhead-${{ matrix.strip }}.yaml
-      - run: esphome config spooky-overhead-${{ matrix.strip }}.yaml > /dev/null
-      - run: esphome compile spooky-overhead-${{ matrix.strip }}.yaml
+      - name: Config
+        run: |
+          esphome config spooky-overhead-${{ matrix.strip }}.yaml > config.log 2>&1 || {
+            tail -n 40 config.log | sed 's/%/%25/g' | while IFS= read -r l; do echo "::error title=config::$l"; done
+            exit 1; }
+      - name: Compile
+        run: |
+          esphome compile spooky-overhead-${{ matrix.strip }}.yaml > build.log 2>&1 || {
+            # Compiler errors as annotations (job logs aren't always reachable), then the tail.
+            grep -E "error:|Error:|ERROR|undefined reference|fatal" build.log | head -n 40 | sed 's/%/%25/g' \
+              | while IFS= read -r l; do echo "::error title=compile::$l"; done
+            tail -n 15 build.log | sed 's/%/%25/g' | while IFS= read -r l; do echo "::warning title=tail::$l"; done
+            exit 1; }
+          tail -n 20 build.log
       - name: Fits WLED's app slot (for the OTA path from WLED)
         run: |
           ota=$(find .esphome/build -name 'firmware.ota.bin' | head -n1)
